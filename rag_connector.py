@@ -1,24 +1,21 @@
-
-import os
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
-# Path to your existing RAG project
+# Locate the RAG project relative to this file
 RAG_PROJECT = Path(__file__).resolve().parent / "phishgurad-rag"
-if not RAG_PROJECT.exists():
+
+if not (RAG_PROJECT / "chatbot.py").exists():
     raise FileNotFoundError(
-        f"RAG project folder not found: {RAG_PROJECT}"
+        f"chatbot.py not found at: {RAG_PROJECT / 'chatbot.py'}"
     )
 
 # Make chatbot.py importable
 sys.path.insert(0, str(RAG_PROJECT))
 
-# Load API keys from the RAG project's .env file
-from dotenv import load_dotenv
-
+# Load environment variables if available
 load_dotenv(RAG_PROJECT / ".env")
 
-# Import the existing RAG answer function
 from chatbot import answer_question
 
 
