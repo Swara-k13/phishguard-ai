@@ -1,0 +1,11 @@
+
+Flask
+flask-cors
+pandas
+scikit-learn==1.8.0
+requests
+beautifulsoup4
+python-dotenv
+groq
+pinecone
+sentence-transformers
