@@ -4,8 +4,7 @@ import sys
 from pathlib import Path
 
 # Path to your existing RAG project
-RAG_PROJECT = Path.home() / "Desktop" / "phishgurad-rag"
-
+RAG_PROJECT = Path(__file__).resolve().parent / "phishgurad-rag"
 if not RAG_PROJECT.exists():
     raise FileNotFoundError(
         f"RAG project folder not found: {RAG_PROJECT}"
