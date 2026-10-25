@@ -9,7 +9,7 @@ import {
 import "./App.css";
 import ReactMarkdown from "react-markdown";
 
-const API = "http://127.0.0.1:5000";
+const API = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:5000";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("scanner");
