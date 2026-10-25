@@ -1,0 +1,10 @@
+__pycache__
+_site
+.vscode
+env
+Gemfile.lock
+
+# Eclipse
+# -------
+*.project
+*.settings

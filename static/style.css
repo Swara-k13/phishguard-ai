@@ -534,3 +534,120 @@ html, body { height: 100%; background: #060a0f; }
   .pg-verdict-heading { font-size: 2.4rem; }
   .pg-verdict-right { align-items: flex-start; }
 }
+
+/* ── PhishGuard Cybersecurity AI Assistant ── */
+.pg-chat-section {
+  width: 100%;
+  max-width: 760px;
+  box-sizing: border-box;
+  margin: 42px auto 36px;
+  padding: 28px;
+  border: 1px solid rgba(0, 200, 150, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.018);
+  animation: fadeUp 0.5s ease both;
+}
+
+.pg-chat-heading {
+  margin-bottom: 22px;
+}
+
+.pg-chat-badge {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  color: #00c896;
+}
+
+.pg-chat-heading h2 {
+  margin: 10px 0;
+  color: #dce8ef;
+  font-size: 1.7rem;
+  font-weight: 700;
+}
+
+.pg-chat-heading p {
+  color: #718392;
+  font-size: 0.88rem;
+  line-height: 1.7;
+}
+
+.pg-chat-form label {
+  display: block;
+  margin-bottom: 9px;
+  color: #a6b8c5;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.75rem;
+}
+
+.pg-chat-form textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.18);
+  color: #dce8ef;
+  font: inherit;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.pg-chat-form textarea::placeholder {
+  color: #526371;
+}
+
+.pg-chat-form textarea:focus {
+  outline: 1px solid #00c896;
+  border-color: #00c896;
+}
+
+.pg-chat-btn {
+  margin-top: 12px;
+  padding: 11px 18px;
+  border: 1px solid rgba(0, 200, 150, 0.3);
+  border-radius: 8px;
+  background: rgba(0, 200, 150, 0.1);
+  color: #00c896;
+  font: 500 0.8rem 'IBM Plex Mono', monospace;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.pg-chat-btn:hover {
+  background: rgba(0, 200, 150, 0.2);
+}
+
+.pg-chat-answer {
+  margin-top: 24px;
+  padding: 20px;
+  border: 1px solid rgba(0, 200, 150, 0.15);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.pg-chat-answer h3 {
+  margin: 0 0 14px;
+  color: #00c896;
+  font-size: 0.9rem;
+}
+
+.pg-chat-answer-text {
+  color: #b5c4cf;
+  font-size: 0.9rem;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .pg-chat-section {
+    padding: 20px;
+    margin-top: 28px;
+  }
+
+  .pg-chat-heading h2 {
+    font-size: 1.45rem;
+  }
+}

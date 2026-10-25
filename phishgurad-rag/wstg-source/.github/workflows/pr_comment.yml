@@ -1,0 +1,26 @@
+name: PR Comment
+
+on:
+  pull_request_target:
+    types:
+      - opened
+
+permissions:
+  pull-requests: write
+
+jobs:
+  PR-Comment:
+    if: github.actor != 'kingthorin' && github.actor != 'wstgbot' && github.actor != 'ThunderSon' && github.actor != 'rejahrehim' && github.actor != 'victoriadrake'  && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+    - name: PR Comment
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: ':warning: Have you followed the [contributions guideance](https://owasp.org/www-project-web-security-testing-guide/#contributions)? Content PRs should generally be made against the the [source repo `OWASP/wstg`](https://github.com/OWASP/wstg).'
+          })

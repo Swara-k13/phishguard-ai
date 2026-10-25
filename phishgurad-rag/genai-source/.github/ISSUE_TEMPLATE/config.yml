@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Get the 2026 publication
+    url: https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/
+    about: Read or get the published OWASP GenAI LLM Top 10 2026.
+  - name: General discussion
+    url: https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/discussions
+    about: Ask questions and discuss topics that are not a specific release correction.
+  - name: OWASP GenAI Security Project
+    url: https://genai.owasp.org/
+    about: Visit the home of the broader OWASP GenAI Security Project.

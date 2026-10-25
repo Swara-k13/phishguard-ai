@@ -1,0 +1,22 @@
+Source: OWASP Top 10 for LLM Applications
+Official URL: https://genai.owasp.org/llm-top-10/
+
+Topic: Prompt Injection
+Prompt injection occurs when crafted input manipulates an AI model into
+ignoring intended instructions or performing unintended actions. Retrieved
+documents and user input must be treated as untrusted data, not as system
+instructions.
+
+Topic: Sensitive Information Disclosure
+An AI application may expose confidential information through its responses,
+context, logs, or connected data sources. Applications should minimize
+sensitive data, enforce access controls, and avoid placing secrets in prompts.
+
+Topic: Excessive Agency
+An AI system with excessive agency has more tools, permissions, or autonomy
+than it needs. Limit its permissions, restrict available actions, and require
+human approval for sensitive operations.
+
+Topic: Insecure Output Handling
+AI-generated output should be treated as untrusted. Validate and safely
+handle it before displaying it or passing it to other systems.

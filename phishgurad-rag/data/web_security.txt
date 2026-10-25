@@ -1,0 +1,21 @@
+Source: OWASP Top 10
+Official URL: https://owasp.org/www-project-top-ten/
+
+Topic: Broken Access Control
+Broken access control occurs when users can perform actions or access
+resources beyond their authorized permissions. Applications should
+enforce authorization checks on the server for every protected operation.
+
+Topic: Security Misconfiguration
+Security misconfiguration includes insecure default settings, unnecessary
+services, improperly configured permissions, and missing security controls.
+Systems should use secure defaults and be reviewed regularly.
+
+Topic: Injection
+Injection vulnerabilities occur when untrusted input is interpreted as
+commands or queries. Applications should validate input and use safe APIs
+and parameterized queries where appropriate.
+
+Topic: Identification and Authentication Failures
+Weak authentication, poor session management, and other authentication
+failures can allow attackers to impersonate legitimate users.

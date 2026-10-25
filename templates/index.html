@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
 <div class="pg-root">
@@ -66,10 +67,11 @@
         </div>
       </form>
     </div>
-
+    {% if error %}
+      <p class="error-message">{{ error }}</p>
+    {% endif %}
     <!-- OUTPUT -->
     {% if prediction_text %}
-
       {% if 'Legitimate' in prediction_text %}
         {% set risk = 'safe' %}
         {% set risk_label = 'Legitimate' %}
@@ -238,6 +240,42 @@
     {% endif %}
 
   </div>
+  
+  <!-- CYBERSECURITY AI ASSISTANT -->
+  <section class="pg-chat-section">
+    <div class="pg-chat-heading">
+      <span class="pg-chat-badge">AI SECURITY ASSISTANT</span>
+      <h2>Ask PhishGuard</h2>
+      <p>Explore phishing, prompt injection, data privacy, and web security.</p>
+    </div>
+
+    <form action="/chat" method="post" class="pg-chat-form" id="pg-chat-form">
+      <label for="pg-chat-question">Your cybersecurity question</label>
+      <textarea
+        id="pg-chat-question"
+        name="question"
+        rows="3"
+        maxlength="2000"
+        placeholder="e.g. How can I prevent prompt injection?"
+        required
+      >{{ chat_question or '' }}</textarea>
+
+      <button type="submit" class="pg-chat-btn" id="pg-chat-btn">
+        Ask AI Assistant
+      </button>
+    </form>
+
+    {% if chat_answer %}
+   <div class="pg-chat-answer" aria-live="polite">
+  <h3>PhishGuard's Answer</h3>
+  <div
+    class="pg-chat-answer-text"
+    id="pg-chat-answer"
+    data-answer="{{ chat_answer | e }}"
+  ></div>
+    {% endif %}
+  </section>
+
 
   <!-- FOOTER -->
   <footer class="pg-footer">
@@ -265,5 +303,17 @@
     });
   }
 </script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+
+<script>
+  const answerElement = document.getElementById("pg-chat-answer");
+
+  if (answerElement && window.marked && window.DOMPurify) {
+    const answer = answerElement.dataset.answer || "";
+    answerElement.innerHTML = DOMPurify.sanitize(marked.parse(answer));
+  }
+</script>
+
 </body>
 </html>

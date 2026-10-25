@@ -5,12 +5,72 @@ from urllib.parse import urlparse, urljoin
 import ipaddress
 import requests
 from bs4 import BeautifulSoup
+from rag_connector import get_security_answer
+from flask_cors import CORS
+from flask import jsonify
 
 app = Flask(__name__)
+
+CORS(app, resources={
+    r"/api/*": {
+        "origins": [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:5175",
+            "http://127.0.0.1:5175"
+        ]
+    }
+})
+
 
 # Load model and feature order
 model = pickle.load(open("model/model.pkl", "rb"))
 feature_names = pickle.load(open("model/feature_names.pkl", "rb"))
+
+
+# ============================================================
+# URL VALIDATION
+# ============================================================
+
+def is_valid_url(url):
+    """Basic syntax validation; does not prove a URL is safe or reachable."""
+    if not url:
+        return False
+
+    try:
+        parsed = urlparse(url.strip())
+
+        if parsed.scheme not in ("http", "https"):
+            return False
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        # Accept localhost, IP addresses, or dotted hostnames.
+        if hostname.lower() == "localhost":
+            return True
+
+        try:
+            ipaddress.ip_address(hostname)
+            return True
+        except ValueError:
+            pass
+
+        if "." not in hostname:
+            return False
+
+        # Reject empty domain labels and whitespace in hostname.
+        labels = hostname.rstrip(".").split(".")
+        if any(not label for label in labels):
+            return False
+        if any(any(ch.isspace() for ch in label) for label in labels):
+            return False
+
+        return True
+
+    except (ValueError, TypeError):
+        return False
 
 
 # ============================================================
@@ -50,7 +110,6 @@ def is_shortened_url(url):
     ]
 
     url_lower = url.lower()
-
     return -1 if any(s in url_lower for s in shorteners) else 1
 
 
@@ -82,7 +141,6 @@ def check_subdomain(url):
         if not hostname:
             return 1
 
-        # IP addresses should not be treated as subdomains
         try:
             ipaddress.ip_address(hostname)
             return 1
@@ -195,7 +253,6 @@ def check_request_url(url):
         page_domain = urlparse(url).hostname
 
         resources = []
-
         resources.extend(soup.find_all("img", src=True))
         resources.extend(soup.find_all("script", src=True))
         resources.extend(
@@ -215,18 +272,12 @@ def check_request_url(url):
         external_count = 0
 
         for resource in resources:
-            resource_url = (
-                resource.get("src")
-                or resource.get("href")
-            )
-
+            resource_url = resource.get("src") or resource.get("href")
             if not resource_url:
                 continue
 
             absolute_url = urljoin(url, resource_url)
-            resource_domain = urlparse(
-                absolute_url
-            ).hostname
+            resource_domain = urlparse(absolute_url).hostname
 
             if resource_domain and resource_domain != page_domain:
                 external_count += 1
@@ -257,7 +308,6 @@ def check_url_of_anchor(url):
 
         soup = BeautifulSoup(response.text, "html.parser")
         page_domain = urlparse(url).hostname
-
         anchors = soup.find_all("a", href=True)
 
         if not anchors:
@@ -275,9 +325,7 @@ def check_url_of_anchor(url):
                 continue
 
             absolute_url = urljoin(url, href)
-            anchor_domain = urlparse(
-                absolute_url
-            ).hostname
+            anchor_domain = urlparse(absolute_url).hostname
 
             if anchor_domain and anchor_domain != page_domain:
                 external_count += 1
@@ -308,7 +356,6 @@ def check_links_in_tags(url):
 
         soup = BeautifulSoup(response.text, "html.parser")
         page_domain = urlparse(url).hostname
-
         tag_links = []
 
         for tag in soup.find_all("link", href=True):
@@ -330,9 +377,7 @@ def check_links_in_tags(url):
 
         for link in tag_links:
             absolute_url = urljoin(url, link)
-            link_domain = urlparse(
-                absolute_url
-            ).hostname
+            link_domain = urlparse(absolute_url).hostname
 
             if link_domain and link_domain != page_domain:
                 external_count += 1
@@ -363,7 +408,6 @@ def check_sfh(url):
 
         soup = BeautifulSoup(response.text, "html.parser")
         page_domain = urlparse(url).hostname
-
         forms = soup.find_all("form")
 
         if not forms:
@@ -376,9 +420,7 @@ def check_sfh(url):
                 continue
 
             action_url = urljoin(url, action)
-            action_domain = urlparse(
-                action_url
-            ).hostname
+            action_domain = urlparse(action_url).hostname
 
             if action_domain and action_domain != page_domain:
                 return -1
@@ -394,7 +436,6 @@ def check_sfh(url):
 # ============================================================
 
 def extract_features(url):
-
     features = [
         has_ip_address(url),
         get_url_length(url),
@@ -428,15 +469,29 @@ def home():
 
 @app.route("/predict", methods=["POST"])
 def predict():
-
     url = request.form.get("url", "").strip()
 
     if not url:
         return render_template(
             "index.html",
-            prediction_text="Please enter a URL",
-            confidence=0,
-            reasons=["No URL was provided."]
+            prediction_text="",
+            confidence=None,
+            reasons=[],
+            submitted_url="",
+            error="Please enter a URL."
+        )
+
+    # Validate before feature extraction and model prediction.
+    if not is_valid_url(url):
+        return render_template(
+            "index.html",
+            prediction_text="Invalid URL",
+            confidence=None,
+            reasons=[
+                "Enter a URL starting with http:// or https://.",
+                "Example: https://www.google.com"
+            ],
+            submitted_url=url
         )
 
     features = extract_features(url)
@@ -451,7 +506,8 @@ def predict():
             confidence=0,
             reasons=[
                 "The feature extractor did not generate exactly 16 features."
-            ]
+            ],
+            submitted_url=url
         )
 
     # Rule-based explanation
@@ -487,14 +543,10 @@ def predict():
         reasons.append("Multiple subdomains detected")
 
     # ML prediction
-    final = pd.DataFrame(
-        [features],
-        columns=feature_names
-    )
+    final = pd.DataFrame([features], columns=feature_names)
 
     prediction = model.predict(final)
     probability = model.predict_proba(final)[0][1]
-
     confidence = round(probability * 100, 2)
 
     if prediction[0] == 0 or risk_score >= 1:
@@ -510,6 +562,133 @@ def predict():
         submitted_url=url
     )
 
+@app.route("/api/predict", methods=["POST"])
+def api_predict():
+    data = request.get_json(silent=True) or {}
+    url = str(data.get("url", "")).strip()
+
+    if not url:
+        return jsonify({"error": "Please enter a URL."}), 400
+
+    if not is_valid_url(url):
+        return jsonify({
+            "error": "Invalid URL. Enter a valid HTTP or HTTPS URL."
+        }), 400
+
+    try:
+        features = extract_features(url)
+
+        if len(features) != 16:
+            return jsonify({
+                "error": "Feature extraction failed."
+            }), 500
+
+        final = pd.DataFrame([features], columns=feature_names)
+        prediction = model.predict(final)
+        probability = model.predict_proba(final)[0][1]
+        confidence = round(float(probability) * 100, 2)
+
+        risk_score = 0
+        reasons = []
+
+        if features[0] == -1:
+            risk_score += 1
+            reasons.append("URL contains an IP address")
+        if features[1] == -1:
+            risk_score += 1
+            reasons.append("URL is unusually long")
+        if features[2] == -1:
+            risk_score += 1
+            reasons.append("Uses a URL shortening service")
+        if features[3] == -1:
+            risk_score += 1
+            reasons.append("URL contains '@' symbol")
+        if features[4] == -1:
+            risk_score += 1
+            reasons.append("Double slash redirection detected")
+        if features[5] == -1:
+            risk_score += 1
+            reasons.append("Hyphenated domain detected")
+        if features[6] == -1:
+            risk_score += 1
+            reasons.append("Multiple subdomains detected")
+
+        if prediction[0] == 0 or risk_score >= 1:
+            result = "Phishing Website"
+        else:
+            result = "Legitimate Website"
+
+        return jsonify({
+            "prediction_text": result,
+            "confidence": confidence,
+            "risk_level": "High Risk" if "Phishing" in result else "Low Risk",
+            "reasons": reasons,
+            "submitted_url": url
+        })
+
+    except Exception:
+        app.logger.exception("URL prediction API failed")
+        return jsonify({
+            "error": "URL analysis failed. Please try again."
+        }), 500
+
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    question = request.form.get("question", "").strip()
+
+    if not question:
+        return render_template(
+            "index.html",
+            chat_answer="Please enter a cybersecurity question."
+        )
+
+    try:
+        answer = get_security_answer(question)
+
+        return render_template(
+            "index.html",
+            chat_question=question,
+            chat_answer=answer
+        )
+
+    except Exception:
+        app.logger.exception("RAG chatbot request failed")
+
+        return render_template(
+            "index.html",
+            chat_question=question,
+            chat_answer=(
+                "The cybersecurity assistant is temporarily unavailable. "
+                "Please try again."
+            )
+        )
+
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    data = request.get_json(silent=True) or {}
+    question = str(data.get("question", "")).strip()
+
+    if not question:
+        return jsonify({
+            "error": "Please enter a cybersecurity question."
+        }), 400
+
+    if len(question) > 2000:
+        return jsonify({
+            "error": "Your question is too long."
+        }), 400
+
+    try:
+        answer = get_security_answer(question)
+        return jsonify({"answer": answer})
+
+    except Exception:
+        app.logger.exception("RAG chatbot API failed")
+        return jsonify({
+            "error": "The security assistant is temporarily unavailable. Please try again."
+        }), 500
 
 if __name__ == "__main__":
     app.run(debug=True)
