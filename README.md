@@ -222,6 +222,12 @@ Send this JSON body to `/api/chat` using an HTTP POST request.
 ## 📸 Screenshots
 
 Add screenshots of the current React interface, phishing prediction results, and RAG chatbot responses here.
+<img width="950" height="431" alt="Screenshot 2026-10-25 105913" src="https://github.com/user-attachments/assets/ebc579f8-e30a-481f-bf8f-96987de16bb6" />
+<img width="937" height="431" alt="Screenshot 2026-10-25 105947" src="https://github.com/user-attachments/assets/b8c03803-d5a5-4bdb-b0b5-850badd49890" />
+<img width="731" height="426" alt="Screenshot 2026-10-25 110012" src="https://github.com/user-attachments/assets/2eb130e8-8d67-4938-aaf4-d4593edf15eb" />
+
+
+
 
 ## 🔮 Future Enhancements
 
