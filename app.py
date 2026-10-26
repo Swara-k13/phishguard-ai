@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify
 import pickle
 import pandas as pd
 from urllib.parse import urlparse, urljoin
@@ -7,7 +7,72 @@ import requests
 from bs4 import BeautifulSoup
 from rag_connector import get_security_answer
 from flask_cors import CORS
-from flask import jsonify
+
+import socket
+from contextlib import contextmanager
+
+
+def is_public_hostname(hostname):
+    """Allow only hostnames resolving exclusively to public IP addresses."""
+    if not hostname:
+        return False
+
+    normalized_hostname = hostname.rstrip(".").lower()
+    if normalized_hostname == "localhost" or normalized_hostname.endswith(".localhost"):
+        return False
+
+    try:
+        # If the input is already an IP address, validate it directly.
+        addresses = [ipaddress.ip_address(hostname)]
+    except ValueError:
+        try:
+            addresses = [
+                ipaddress.ip_address(item[4][0])
+                for item in socket.getaddrinfo(
+                    hostname, None, type=socket.SOCK_STREAM
+                )
+            ]
+        except (socket.gaierror, ValueError, OSError):
+            return False
+
+    return bool(addresses) and all(
+        address.is_global for address in addresses
+    )
+
+
+@contextmanager
+def safe_fetch(url):
+    """
+    Fetch a URL only when its hostname resolves to public IP addresses.
+    Redirects are disabled so each destination must be validated separately.
+    """
+    parsed = urlparse(url)
+
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Only HTTP and HTTPS URLs are allowed.")
+
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URLs containing embedded credentials are not allowed.")
+
+    try:
+        port = parsed.port  # Validates malformed/out-of-range port syntax.
+    except ValueError as exc:
+        raise ValueError("URL contains an invalid port.") from exc
+
+    if not is_public_hostname(parsed.hostname):
+        raise ValueError("URL destination is not allowed.")
+
+    response = requests.get(
+        url,
+        timeout=(3, 5),
+        headers={"User-Agent": "Mozilla/5.0"},
+        allow_redirects=False,
+    )
+
+    try:
+        yield response
+    finally:
+        response.close()
 
 app = Flask(__name__)
 
@@ -24,9 +89,43 @@ CORS(app, resources={
 })
 
 
-# Load model and feature order
-model = pickle.load(open("model/model.pkl", "rb"))
-feature_names = pickle.load(open("model/feature_names.pkl", "rb"))
+# Load model and feature order.
+# Only load pickle files that you created and trust.
+with open("model/model.pkl", "rb") as model_file:
+    model = pickle.load(model_file)
+
+with open("model/feature_names.pkl", "rb") as feature_file:
+    feature_names = pickle.load(feature_file)
+
+EXPECTED_FEATURE_NAMES = [
+    "having_IP_Address",
+    "URL_Length",
+    "Shortining_Service",
+    "having_At_Symbol",
+    "double_slash_redirecting",
+    "Prefix_Suffix",
+    "having_Sub_Domain",
+    "SSLfinal_State",
+    "Domain_registeration_length",
+    "Favicon",
+    "port",
+    "HTTPS_token",
+    "Request_URL",
+    "URL_of_Anchor",
+    "Links_in_tags",
+    "SFH",
+]
+
+if feature_names != EXPECTED_FEATURE_NAMES:
+    raise ValueError(
+        "feature_names.pkl does not match the expected 16-feature order. "
+        "Regenerate it using the same order used to train the model."
+    )
+
+if not hasattr(model, "classes_") or 0 not in model.classes_ or 1 not in model.classes_:
+    raise ValueError(
+        "The model must contain classes 0 (phishing) and 1 (legitimate)."
+    )
 
 
 # ============================================================
@@ -45,23 +144,21 @@ def is_valid_url(url):
             return False
 
         hostname = parsed.hostname
-        if not hostname:
+        if not hostname or parsed.username is not None or parsed.password is not None:
             return False
 
-        # Accept localhost, IP addresses, or dotted hostnames.
-        if hostname.lower() == "localhost":
-            return True
+        # Only permit destinations that resolve exclusively to public IPs.
+        # safe_fetch() repeats this check immediately before the HTTP request.
+        if not is_public_hostname(hostname):
+            return False
 
-        try:
-            ipaddress.ip_address(hostname)
-            return True
-        except ValueError:
-            pass
-
+        # Reject malformed dotted hostnames / empty labels.
         if "." not in hostname:
-            return False
+            try:
+                ipaddress.ip_address(hostname)
+            except ValueError:
+                return False
 
-        # Reject empty domain labels and whitespace in hostname.
         labels = hostname.rstrip(".").split(".")
         if any(not label for label in labels):
             return False
@@ -103,15 +200,27 @@ def get_url_length(url):
         return -1
 
 
-def is_shortened_url(url):
-    shorteners = [
-        "bit.ly", "tinyurl.com", "goo.gl", "t.co",
-        "ow.ly", "is.gd", "buff.ly", "adf.ly",
-        "bit.do", "cutt.ly"
-    ]
 
-    url_lower = url.lower()
-    return -1 if any(s in url_lower for s in shorteners) else 1
+def is_shortened_url(url):
+    """Check whether the URL hostname is a known URL shortener."""
+    shorteners = {
+        "bit.ly",
+        "tinyurl.com",
+        "goo.gl",
+        "t.co",
+        "ow.ly",
+        "is.gd",
+        "buff.ly",
+        "adf.ly",
+        "bit.do",
+        "cutt.ly",
+    }
+
+    try:
+        hostname = (urlparse(url).hostname or "").lower().rstrip(".")
+        return -1 if hostname in shorteners else 1
+    except (ValueError, TypeError):
+        return 1
 
 
 def has_at_symbol(url):
@@ -166,52 +275,45 @@ def check_ssl_state(url):
 
 
 def check_domain_registration(url):
-    try:
-        hostname = urlparse(url).hostname
-
-        if not hostname:
-            return 0
-
-        # WHOIS information is not available locally.
-        return 0
-
-    except Exception:
-        return 0
+    # WHOIS registration age is not currently checked.
+    # The training dataset only contains -1 and 1 for this feature.
+    # This is a neutral fallback, not a verified registration result.
+    return 1
 
 
 def check_favicon(url):
     try:
-        response = requests.get(
-            url,
-            timeout=5,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        with safe_fetch(url) as response:
+            if 300 <= response.status_code < 400:
+                response.close()
+                return 0
 
-        if response.status_code != 200:
-            return 0
+            if response.status_code != 200:
+                return 0
 
-        soup = BeautifulSoup(response.text, "html.parser")
+            soup = BeautifulSoup(response.text, "html.parser")
 
-        favicon = soup.find(
-            "link",
-            rel=lambda value: value and any(
-                "icon" in item.lower() for item in value
+            favicon = soup.find(
+                "link",
+                rel=lambda value: value and any(
+                    "icon" in item.lower() for item in value
+                )
             )
-        )
 
-        if not favicon or not favicon.get("href"):
-            return 0
+            if not favicon or not favicon.get("href"):
+                return 0
 
-        favicon_url = urljoin(url, favicon["href"])
+            favicon_url = urljoin(url, favicon["href"])
 
-        page_domain = urlparse(url).hostname
-        favicon_domain = urlparse(favicon_url).hostname
+            page_domain = normalize_domain(urlparse(url).hostname)
+            favicon_domain = normalize_domain(urlparse(favicon_url).hostname)
 
-        return 1 if favicon_domain == page_domain else -1
+            if not favicon_domain:
+                return 0
+            return 1 if favicon_domain == page_domain else -1
 
     except Exception:
         return 0
-
 
 def check_port(url):
     try:
@@ -239,194 +341,193 @@ def check_https_token(url):
         return 1
 
 
+def normalize_domain(host):
+    """Normalize hostnames by lowercasing and removing a leading www.
+
+    Note: this is not a full registrable-domain comparison; subdomains such
+    as cdn.example.com and example.com remain different hosts.
+    """
+    host = (host or "").lower().rstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
 def check_request_url(url):
     try:
-        response = requests.get(
-            url,
-            timeout=5,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        with safe_fetch(url) as response:
+            if 300 <= response.status_code < 400:
+                response.close()
+                return 0
 
-        if response.status_code != 200:
-            return 0
+            if response.status_code != 200:
+                return 0
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        page_domain = urlparse(url).hostname
-
-        resources = []
-        resources.extend(soup.find_all("img", src=True))
-        resources.extend(soup.find_all("script", src=True))
-        resources.extend(
-            soup.find_all(
-                "link",
-                href=True,
-                rel=lambda value:
-                    value and "stylesheet" in value
+            soup = BeautifulSoup(response.text, "html.parser")
+            page_domain = normalize_domain(urlparse(url).hostname)
+            resources = []
+            resources.extend(soup.find_all("img", src=True))
+            resources.extend(soup.find_all("script", src=True))
+            resources.extend(
+                soup.find_all(
+                    "link",
+                    href=True,
+                    rel=lambda value:
+                        value and "stylesheet" in value
+                )
             )
-        )
-        resources.extend(soup.find_all("audio", src=True))
-        resources.extend(soup.find_all("video", src=True))
+            resources.extend(soup.find_all("audio", src=True))
+            resources.extend(soup.find_all("video", src=True))
 
-        if not resources:
-            return 1
+            if not resources:
+                return 1
 
-        external_count = 0
+            external_count = 0
 
-        for resource in resources:
-            resource_url = resource.get("src") or resource.get("href")
-            if not resource_url:
-                continue
+            for resource in resources:
+                resource_url = resource.get("src") or resource.get("href")
+                if not resource_url:
+                    continue
 
-            absolute_url = urljoin(url, resource_url)
-            resource_domain = urlparse(absolute_url).hostname
+                absolute_url = urljoin(url, resource_url)
+                resource_domain = urlparse(absolute_url).hostname
+                if resource_domain and normalize_domain(resource_domain) != page_domain:
+                    external_count += 1
 
-            if resource_domain and resource_domain != page_domain:
-                external_count += 1
+            ratio = external_count / len(resources)
 
-        ratio = external_count / len(resources)
-
-        if ratio < 0.22:
-            return 1
-        elif ratio <= 0.61:
-            return 0
-        else:
-            return -1
+            if ratio < 0.22:
+                return 1
+            elif ratio <= 0.61:
+                return 0
+            else:
+                return -1
 
     except Exception:
         return 0
-
 
 def check_url_of_anchor(url):
     try:
-        response = requests.get(
-            url,
-            timeout=5,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        with safe_fetch(url) as response:
+            if 300 <= response.status_code < 400:
+                response.close()
+                return 0
 
-        if response.status_code != 200:
-            return 0
+            soup = BeautifulSoup(response.text, "html.parser")
+            page_domain = normalize_domain(urlparse(url).hostname)
+            anchors = soup.find_all("a", href=True)
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        page_domain = urlparse(url).hostname
-        anchors = soup.find_all("a", href=True)
+            if not anchors:
+                return 1
 
-        if not anchors:
-            return 1
+            external_count = 0
 
-        external_count = 0
+            for anchor in anchors:
+                href = anchor.get("href", "").strip()
 
-        for anchor in anchors:
-            href = anchor.get("href", "").strip()
+                if not href or href.startswith("#"):
+                    continue
 
-            if not href or href.startswith("#"):
-                continue
+                if href.lower().startswith(("javascript:", "mailto:")):
+                    continue
 
-            if href.lower().startswith(("javascript:", "mailto:")):
-                continue
+                absolute_url = urljoin(url, href)
+                anchor_domain = urlparse(absolute_url).hostname
 
-            absolute_url = urljoin(url, href)
-            anchor_domain = urlparse(absolute_url).hostname
+                if anchor_domain and normalize_domain(anchor_domain) != page_domain:
+                    external_count += 1
 
-            if anchor_domain and anchor_domain != page_domain:
-                external_count += 1
+            ratio = external_count / len(anchors)
 
-        ratio = external_count / len(anchors)
-
-        if ratio < 0.31:
-            return 1
-        elif ratio <= 0.67:
-            return 0
-        else:
-            return -1
+            if ratio < 0.31:
+                return 1
+            elif ratio <= 0.67:
+                return 0
+            else:
+                return -1
 
     except Exception:
         return 0
-
 
 def check_links_in_tags(url):
     try:
-        response = requests.get(
-            url,
-            timeout=5,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        with safe_fetch(url) as response:
+            if 300 <= response.status_code < 400:
+                response.close()
+                return 0
 
-        if response.status_code != 200:
-            return 0
+            if response.status_code != 200:
+                return 0
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        page_domain = urlparse(url).hostname
-        tag_links = []
+            soup = BeautifulSoup(response.text, "html.parser")
+            page_domain = normalize_domain(urlparse(url).hostname)
+            tag_links = []
 
-        for tag in soup.find_all("link", href=True):
-            tag_links.append(tag["href"])
+            for tag in soup.find_all("link", href=True):
+                tag_links.append(tag["href"])
 
-        for tag in soup.find_all("script", src=True):
-            tag_links.append(tag["src"])
+            for tag in soup.find_all("script", src=True):
+                tag_links.append(tag["src"])
 
-        for tag in soup.find_all("meta", content=True):
-            content = tag.get("content", "")
+            for tag in soup.find_all("meta", content=True):
+                content = tag.get("content", "")
 
-            if content.startswith(("http://", "https://")):
-                tag_links.append(content)
+                if content.startswith(("http://", "https://")):
+                    tag_links.append(content)
 
-        if not tag_links:
-            return 1
+            if not tag_links:
+                return 1
 
-        external_count = 0
+            external_count = 0
 
-        for link in tag_links:
-            absolute_url = urljoin(url, link)
-            link_domain = urlparse(absolute_url).hostname
+            for link in tag_links:
+                absolute_url = urljoin(url, link)
+                link_domain = urlparse(absolute_url).hostname
 
-            if link_domain and link_domain != page_domain:
-                external_count += 1
+                if link_domain and normalize_domain(link_domain) != page_domain:
+                    external_count += 1
 
-        ratio = external_count / len(tag_links)
+            ratio = external_count / len(tag_links)
 
-        if ratio < 0.17:
-            return 1
-        elif ratio <= 0.81:
-            return 0
-        else:
-            return -1
+            if ratio < 0.17:
+                return 1
+            elif ratio <= 0.81:
+                return 0
+            else:
+                return -1
 
     except Exception:
         return 0
 
-
 def check_sfh(url):
     try:
-        response = requests.get(
-            url,
-            timeout=5,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        with safe_fetch(url) as response:
+            if 300 <= response.status_code < 400:
+                response.close()
+                return 0
 
-        if response.status_code != 200:
-            return 0
+            if response.status_code != 200:
+                return 0
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        page_domain = urlparse(url).hostname
-        forms = soup.find_all("form")
+            soup = BeautifulSoup(response.text, "html.parser")
+            page_domain = normalize_domain(urlparse(url).hostname)
+            forms = soup.find_all("form")
 
-        if not forms:
+            if not forms:
+                return 1
+
+            for form in forms:
+                action = form.get("action", "").strip()
+
+                if not action:
+                    continue
+
+                action_url = urljoin(url, action)
+                action_domain = urlparse(action_url).hostname
+
+                if action_domain and normalize_domain(action_domain) != page_domain:
+                    return -1
+
             return 1
-
-        for form in forms:
-            action = form.get("action", "").strip()
-
-            if not action:
-                continue
-
-            action_url = urljoin(url, action)
-            action_domain = urlparse(action_url).hostname
-
-            if action_domain and action_domain != page_domain:
-                return -1
-
-        return 1
 
     except Exception:
         return 0
@@ -435,7 +536,6 @@ def check_sfh(url):
 # ============================================================
 # CREATE 16-FEATURE VECTOR
 # ============================================================
-
 def extract_features(url):
     features = [
         has_ip_address(url),
@@ -459,6 +559,133 @@ def extract_features(url):
     return features
 
 
+INCONCLUSIVE_FEATURES = {
+    "Domain_registeration_length": 8,
+    "Favicon": 9,
+    "Request_URL": 12,
+    "URL_of_Anchor": 13,
+    "Links_in_tags": 14,
+    "SFH": 15,
+}
+
+
+def get_inconclusive_features(features):
+    """
+    Return feature names whose value is zero for further review.
+
+    A zero does not always mean a check failed; feature meanings depend
+    on the original dataset's encoding. Use this only as a diagnostic.
+    """
+    if len(features) != len(feature_names):
+        return []
+
+    return [
+        name
+        for name, index in INCONCLUSIVE_FEATURES.items()
+        if features[index] == 0
+    ]
+
+
+def get_risk_indicators(features):
+    reasons = []
+    indicators = [
+        (0, "URL contains an IP address"),
+        (1, "URL is unusually long"),
+        (2, "Uses a URL shortening service"),
+        (3, "URL contains '@' symbol"),
+        (4, "Double slash redirection detected"),
+        (5, "Hyphenated domain detected"),
+        (6, "Multiple subdomains detected"),
+    ]
+
+    for index, message in indicators:
+        if features[index] == -1:
+            reasons.append(message)
+
+    return reasons
+
+
+def analyze_url(url):
+    """
+    Extract features and classify a URL.
+
+    Label mapping:
+      0 = phishing
+      1 = legitimate
+    """
+    # 1. Extract features
+    features = extract_features(url)
+
+    # 2. Validate feature count
+    if len(features) != len(feature_names):
+        raise ValueError(
+            f"Expected {len(feature_names)} features, "
+            f"but received {len(features)}."
+        )
+
+    # 3. Prepare features for the model
+    final = pd.DataFrame([features], columns=feature_names)
+
+    # 4. Get model prediction and probabilities
+    predicted_class = int(model.predict(final)[0])
+    probabilities = model.predict_proba(final)[0]
+    classes = list(model.classes_)
+
+    predicted_index = classes.index(predicted_class)
+    phishing_index = classes.index(0)
+    legitimate_index = classes.index(1)
+
+    model_confidence = round(
+        float(probabilities[predicted_index]) * 100, 2
+    )
+    phishing_probability = round(
+        float(probabilities[phishing_index]) * 100, 2
+    )
+    legitimate_probability = round(
+        float(probabilities[legitimate_index]) * 100, 2
+    )
+
+    # 5. Calculate heuristic risk indicators
+    reasons = get_risk_indicators(features)
+    risk_score = len(reasons)
+
+    # 6. Final classification
+    # The model determines the classification. Heuristic indicators are
+    # reported separately as warnings so one indicator alone does not
+    # automatically label a site as phishing.
+    result = (
+        "Phishing Website"
+        if predicted_class == 0
+        else "Legitimate Website"
+    )
+    decision_source = "model"
+
+    # Risk level includes heuristic warnings but does not override the model.
+    if predicted_class == 0:
+        risk_level = "High Risk"
+    elif risk_score > 0:
+        risk_level = "Review Recommended"
+    else:
+        risk_level = "Low Risk"
+
+    # 7. Return analysis
+    return {
+        "prediction_text": result,
+        "confidence": model_confidence,
+        "model_prediction": (
+            "Phishing Website"
+            if predicted_class == 0
+            else "Legitimate Website"
+        ),
+        "phishing_probability": phishing_probability,
+        "legitimate_probability": legitimate_probability,
+        "risk_level": risk_level,
+        "risk_score": risk_score,
+        "decision_source": decision_source,
+        "reasons": reasons,
+        "inconclusive_features": get_inconclusive_features(features),
+        "features": features,
+    }
 # ============================================================
 # ROUTES
 # ============================================================
@@ -482,7 +709,6 @@ def predict():
             error="Please enter a URL."
         )
 
-    # Validate before feature extraction and model prediction.
     if not is_valid_url(url):
         return render_template(
             "index.html",
@@ -495,73 +721,34 @@ def predict():
             submitted_url=url
         )
 
-    features = extract_features(url)
+    try:
+        analysis = analyze_url(url)
+        app.logger.info("URL analysis completed; extracted %s features.", len(analysis["features"]))
 
-    print("URL:", url)
-    print("FEATURES:", features)
-
-    if len(features) != 16:
         return render_template(
             "index.html",
-            prediction_text="Feature Extraction Error",
-            confidence=0,
-            reasons=[
-                "The feature extractor did not generate exactly 16 features."
-            ],
+            prediction_text=analysis["prediction_text"],
+            confidence=analysis["confidence"],
+            phishing_probability=analysis["phishing_probability"],
+            legitimate_probability=analysis["legitimate_probability"],
+            model_prediction=analysis["model_prediction"],
+            decision_source=analysis["decision_source"],
+            risk_level=analysis["risk_level"],
+            reasons=analysis["reasons"],
+            inconclusive_features=analysis["inconclusive_features"],
             submitted_url=url
         )
 
-    # Rule-based explanation
-    risk_score = 0
-    reasons = []
+    except Exception:
+        app.logger.exception("HTML URL prediction failed")
+        return render_template(
+            "index.html",
+            prediction_text="Analysis Error",
+            confidence=None,
+            reasons=["URL analysis failed. Please try again."],
+            submitted_url=url
+        ), 500
 
-    if features[0] == -1:
-        risk_score += 1
-        reasons.append("URL contains an IP address")
-
-    if features[1] == -1:
-        risk_score += 1
-        reasons.append("URL is unusually long")
-
-    if features[2] == -1:
-        risk_score += 1
-        reasons.append("Uses a URL shortening service")
-
-    if features[3] == -1:
-        risk_score += 1
-        reasons.append("URL contains '@' symbol")
-
-    if features[4] == -1:
-        risk_score += 1
-        reasons.append("Double slash redirection detected")
-
-    if features[5] == -1:
-        risk_score += 1
-        reasons.append("Hyphenated domain detected")
-
-    if features[6] == -1:
-        risk_score += 1
-        reasons.append("Multiple subdomains detected")
-
-    # ML prediction
-    final = pd.DataFrame([features], columns=feature_names)
-
-    prediction = model.predict(final)
-    probability = model.predict_proba(final)[0][1]
-    confidence = round(probability * 100, 2)
-
-    if prediction[0] == 0 or risk_score >= 1:
-        result = "Phishing Website"
-    else:
-        result = "Legitimate Website"
-
-    return render_template(
-        "index.html",
-        prediction_text=result,
-        confidence=confidence,
-        reasons=reasons,
-        submitted_url=url
-    )
 
 @app.route("/api/predict", methods=["POST"])
 def api_predict():
@@ -577,54 +764,14 @@ def api_predict():
         }), 400
 
     try:
-        features = extract_features(url)
+        analysis = analyze_url(url)
 
-        if len(features) != 16:
-            return jsonify({
-                "error": "Feature extraction failed."
-            }), 500
-
-        final = pd.DataFrame([features], columns=feature_names)
-        prediction = model.predict(final)
-        probability = model.predict_proba(final)[0][1]
-        confidence = round(float(probability) * 100, 2)
-
-        risk_score = 0
-        reasons = []
-
-        if features[0] == -1:
-            risk_score += 1
-            reasons.append("URL contains an IP address")
-        if features[1] == -1:
-            risk_score += 1
-            reasons.append("URL is unusually long")
-        if features[2] == -1:
-            risk_score += 1
-            reasons.append("Uses a URL shortening service")
-        if features[3] == -1:
-            risk_score += 1
-            reasons.append("URL contains '@' symbol")
-        if features[4] == -1:
-            risk_score += 1
-            reasons.append("Double slash redirection detected")
-        if features[5] == -1:
-            risk_score += 1
-            reasons.append("Hyphenated domain detected")
-        if features[6] == -1:
-            risk_score += 1
-            reasons.append("Multiple subdomains detected")
-
-        if prediction[0] == 0 or risk_score >= 1:
-            result = "Phishing Website"
-        else:
-            result = "Legitimate Website"
+        # Do not expose the raw feature vector by default.
+        analysis.pop("features", None)
 
         return jsonify({
-            "prediction_text": result,
-            "confidence": confidence,
-            "risk_level": "High Risk" if "Phishing" in result else "Low Risk",
-            "reasons": reasons,
-            "submitted_url": url
+            **analysis,
+            "submitted_url": url,
         })
 
     except Exception:
@@ -692,4 +839,5 @@ def api_chat():
         }), 500
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # Use debug=True only for local development, never for public deployment.
+    app.run(debug=False)

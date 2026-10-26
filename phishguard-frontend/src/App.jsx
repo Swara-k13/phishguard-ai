@@ -9,8 +9,10 @@ import {
 import "./App.css";
 import ReactMarkdown from "react-markdown";
 
-const API = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:5000";
-
+const API = (
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://127.0.0.1:5000"
+).replace(/\/+$/, "");
 export default function App() {
   const [activeTab, setActiveTab] = useState("scanner");
   const [url, setUrl] = useState("");
@@ -360,7 +362,7 @@ export default function App() {
 
                   <div className="result-metrics">
                     <div className="metric-box">
-                      <span>Model confidence</span>
+                      <span>Estimated legitimate-class probability</span>
                       <strong>
                         {scan.confidence == null
                           ? "—"
@@ -395,11 +397,12 @@ export default function App() {
                         ))}
                       </ul>
                     ) : (
-                      <p className="no-indicators">
-                        No rule-based suspicious URL indicators were
-                        detected. This does not guarantee that the
-                        website is safe.
-                      </p>
+                       <p className="no-indicators">
+    No suspicious indicators were flagged by the current
+    rule-based checks. Some features may be inconclusive
+    if the website could not be fetched or analyzed.
+    This does not guarantee that the website is safe.
+  </p>
                     )}
                   </div>
 
